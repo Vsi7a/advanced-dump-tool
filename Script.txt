@@ -1,0 +1,196 @@
+-- TWKS Advanced Dumper (Full Bypass + File Export)
+
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "TWKS Advanced Dumper",
+    LoadingTitle = "TWKS Interface",
+    LoadingSubtitle = "by TWKS",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "TWKS_Config",
+        FileName = "Config"
+    },
+    KeySystem = false
+})
+
+local isMonitoring = false
+local spyLoadstring = false
+local spyHttpGet = false
+local spyInstances = false
+
+local originalLoadstring = loadstring
+local originalInstanceNew = Instance.new
+local originalHttpGet = game.HttpGet
+
+local hookedLoadstring = nil
+local hookedHttpGet = nil
+local hookedInstanceNew = nil
+
+local scriptInput = ""
+local capturedLogs = {}
+
+local function logAndCapture(text)
+    print(text)
+    table.insert(capturedLogs, text)
+end
+
+local MainTab = Window:CreateTab("Panel", 4483345998)
+
+MainTab:CreateInput({
+    Name = "Script Input",
+    PlaceholderText = "Введите код здесь...",
+    RemoveTextAfterFocusLost = false,
+    Callback = function(Value)
+        scriptInput = Value
+    end
+})
+
+MainTab:CreateButton({
+    Name = "💾 Сохранить в файл (dump.txt)",
+    Callback = function()
+        if writefile then
+            local combined = table.concat(capturedLogs, "\n\n-----------------------------------\n\n")
+            writefile("TWKS_Dump_" .. os.time() .. ".txt", combined)
+            logAndCapture("[TWKS] Логи успешно сохранены в файл в папку workspace вашего экзекьютора!")
+        else
+            logAndCapture("[TWKS Error] writefile не поддерживается вашим экзекьютором.")
+        end
+    end
+})
+
+MainTab:CreateButton({
+    Name = "🗑️ Очистить логи",
+    Callback = function()
+        capturedLogs = {}
+        print("[TWKS] Логи очищены.")
+    end
+})
+
+local executeButton
+local runningThread = nil
+
+local function safeSet(t, k, v)
+    local success = pcall(function()
+        t[k] = v
+    end)
+    if not success and setreadonly and makewriteable then
+        pcall(function() makewriteable(t) end)
+        pcall(function() t[k] = v end)
+        pcall(function() setreadonly(t, true) end)
+    end
+end
+
+executeButton = MainTab:CreateButton({
+    Name = "Execute",
+    Callback = function()
+        if not isMonitoring then
+            isMonitoring = true
+            executeButton:Set("Stop")
+            
+            if spyLoadstring then
+                hookedLoadstring = function(code, chunkname)
+                    local sourceName = chunkname or "unknown"
+                    local header = string.format("[Spy - Loadstring Chunk]: %s (Length: %d)", sourceName, type(code) == "string" and #code or 0)
+                    logAndCapture(header)
+                    if type(code) == "string" then
+                        logAndCapture(code)
+                    end
+                    return originalLoadstring(code, chunkname)
+                end
+                safeSet(getgenv(), "loadstring", hookedLoadstring)
+            end
+            
+            if spyHttpGet then
+                hookedHttpGet = function(self, url, ...)
+                    logAndCapture("[Spy - HttpGet URL]: " .. tostring(url))
+                    local result = originalHttpGet(self, url, ...)
+                    if type(result) == "string" then
+                        logAndCapture(string.format("[Spy - HttpGet Content (%d chars)]:\n%s", #result, result))
+                    end
+                    return result
+                end
+                
+                local mt = getrawmetatable(game)
+                safeSet(mt, "__index", newcclosure(function(self, k)
+                    if k == "HttpGet" then
+                        return hookedHttpGet
+                    end
+                    return mt.__index(self, k)
+                end))
+            end
+            
+            if spyInstances then
+                hookedInstanceNew = function(className, parent)
+                    local obj = originalInstanceNew(className, parent)
+                    logAndCapture(string.format("[Spy - Instance]: Created %s Parent: %s", className, parent and parent.Name or "nil"))
+                    return obj
+                end
+                if getgenv().Instance then
+                    safeSet(getgenv().Instance, "new", hookedInstanceNew)
+                end
+            end
+            
+            if scriptInput ~= "" then
+                runningThread = task.spawn(function()
+                    local success, err = pcall(function()
+                        local func = originalLoadstring(scriptInput)
+                        if func then func() end
+                    end)
+                    if not success then
+                        warn("[Execution Error]:", err)
+                    end
+                end)
+            end
+        else
+            isMonitoring = false
+            executeButton:Set("Execute")
+            
+            if getgenv then
+                if hookedLoadstring then
+                    safeSet(getgenv(), "loadstring", originalLoadstring)
+                end
+                if hookedInstanceNew and getgenv().Instance then
+                    safeSet(getgenv().Instance, "new", originalInstanceNew)
+                end
+            end
+            
+            if runningThread then
+                task.cancel(runningThread)
+                runningThread = nil
+            end
+            print("[Spy] Monitoring stopped and hooks restored.")
+        end
+    end
+})
+
+local SettingsTab = Window:CreateTab("Settings", 4483362458)
+
+SettingsTab:CreateToggle({
+    Name = "loadstring dump/spy",
+    CurrentValue = false,
+    Flag = "SpyLoadstring",
+    Callback = function(Value)
+        spyLoadstring = Value
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "local dump/spy (HttpGet)",
+    CurrentValue = false,
+    Flag = "SpyHttpGet",
+    Callback = function(Value)
+        spyHttpGet = Value
+    end
+})
+
+SettingsTab:CreateToggle({
+    Name = "Instances dump/spy",
+    CurrentValue = false,
+    Flag = "SpyInstances",
+    Callback = function(Value)
+        spyInstances = Value
+    end
+})
+
+Rayfield:LoadConfiguration()
